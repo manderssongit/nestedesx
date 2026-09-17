@@ -18,6 +18,26 @@
 #>
  
 # ===========================================================================
+#  NATVERKSPLAN (referens) - allt utom Management rider som VLAN-taggar pa den
+#  nested trunk-portgruppen. BARA management-planet behover DNS-poster (DnsRecords).
+#  ---------------------------------------------------------------------------
+#   Nat          VLAN    Subnat             GW              MTU    IP-pool (forslag)
+#   Management   0/untag 192.168.0.0/24     192.168.0.1     1500   se DnsRecords
+#   vMotion      20      192.168.20.0/24    192.168.20.1    9000   .101-.150
+#   vSAN         30      192.168.30.0/24    192.168.30.1    9000   .101-.150
+#   Host TEP     40      192.168.40.0/24    192.168.40.1    9000   .101-.150
+#   Edge TEP     50      192.168.50.0/24    192.168.50.1    9000   .101-.150  (om NSX Edges)
+#   Uplink-01    60      192.168.60.0/24    192.168.60.1    9000   T0 BGP-peer (om Edges)
+#   Uplink-02    61      192.168.61.0/24    192.168.61.1    9000   T0 BGP-peer (om Edges)
+#  ---------------------------------------------------------------------------
+#   - Yttre laget (unmanaged vDS + trunk-portgroup) MTU 9000 sa overlay/vSAN-jumbo ryms.
+#   - GW .1 pa varje nat: Cloud Builder PINGAR mgmt-gw och failar annars. En liten
+#     gateway-VM (VyOS/pfSense), multi-armad pa dessa VLAN, svarar. vMotion/vSAN/TEP
+#     pa samma fysiska host ar L2 och behover ingen routing, men VCF-natverksprofilen
+#     vill anda ha GW-faltet ifyllt.
+#   - Alla trafikslag ar bara VLAN-taggar pa samma trunk-portgroup; separata subnat
+#     halls isar av VLAN-taggning inne i nested-miljon, inte av separata portgrupper.
+# ===========================================================================
 #  KONFIG  — allt trakigt har. Aven DNS-posterna (inline ELLER via CSV).
 # ===========================================================================
 $Config = @{
@@ -26,9 +46,9 @@ $Config = @{
     DomainName     = 'nested.internal'
     NetbiosName    = 'NESTED'
     DsrmPassword   = 'ChangeMe-DSRM-P@ss1'          # TODO: byt / valvsecret
-    DcIp           = '10.10.0.10'
-    MgmtSubnetId   = '10.10.0.0/24'
-    ReverseZone    = '0.10.10.in-addr.arpa'
+    DcIp           = '192.168.0.10'
+    MgmtSubnetId   = '192.168.0.0/24'
+    ReverseZone    = '0.168.192.in-addr.arpa'
  
     # CA
     CaCommonName   = 'lab-Root-CA'
@@ -47,17 +67,46 @@ $Config = @{
     # DNS-import: anvand antingen inline-listan ELLER peka pa en CSV (Name,Ip).
     DnsRecordsCsv  = ''                               # t.ex. 'C:\EnvBuild\dns.csv'
     DnsRecords     = @(
-        @{ Name = 'dc';       Ip = '10.10.0.10' }
-        @{ Name = 'pki';      Ip = '10.10.0.10' }
-        @{ Name = 'depot';    Ip = '10.10.0.10' }
-        @{ Name = 'vcenter';  Ip = '10.10.0.20' }
-        @{ Name = 'nsx';      Ip = '10.10.0.21' }
-        @{ Name = 'sddc';     Ip = '10.10.0.22' }
-        @{ Name = 'cb';       Ip = '10.10.0.23' }     # cloud builder
-        @{ Name = 'esx01';    Ip = '10.10.0.50' }
-        @{ Name = 'esx02';    Ip = '10.10.0.51' }
-        @{ Name = 'esx03';    Ip = '10.10.0.52' }
-        @{ Name = 'esx04';    Ip = '10.10.0.53' }
+        # --- Infra ---
+        @{ Name = 'gw';           Ip = '192.168.0.1'  }   # gateway-VM (Cloud Builder pingar mgmt-gw)
+        @{ Name = 'dc';           Ip = '192.168.0.10' }
+        @{ Name = 'pki';          Ip = '192.168.0.10' }
+        @{ Name = 'depot';        Ip = '192.168.0.10' }
+        @{ Name = 'ntp';          Ip = '192.168.0.10' }
+        @{ Name = 'jump';         Ip = '192.168.0.11' }
+        @{ Name = 'splunk';       Ip = '192.168.0.12' }   # framtida bruk
+        @{ Name = 'cb';           Ip = '192.168.0.20' }   # Cloud Builder
+        # --- Management-doman (6 esx) ---
+        @{ Name = 'vcenter-mgmt'; Ip = '192.168.0.30' }
+        @{ Name = 'sddc';         Ip = '192.168.0.31' }
+        @{ Name = 'nsx-mgmt-vip'; Ip = '192.168.0.40' }
+        @{ Name = 'nsx-mgmt01';   Ip = '192.168.0.41' }
+        @{ Name = 'nsx-mgmt02';   Ip = '192.168.0.42' }
+        @{ Name = 'nsx-mgmt03';   Ip = '192.168.0.43' }
+        @{ Name = 'esx-mgmt01';   Ip = '192.168.0.51' }
+        @{ Name = 'esx-mgmt02';   Ip = '192.168.0.52' }
+        @{ Name = 'esx-mgmt03';   Ip = '192.168.0.53' }
+        @{ Name = 'esx-mgmt04';   Ip = '192.168.0.54' }
+        @{ Name = 'esx-mgmt05';   Ip = '192.168.0.55' }
+        @{ Name = 'esx-mgmt06';   Ip = '192.168.0.56' }
+        # --- WLD Prod (eget NSX) ---
+        @{ Name = 'vcenter-prod'; Ip = '192.168.0.60' }
+        @{ Name = 'nsx-prod-vip'; Ip = '192.168.0.70' }
+        @{ Name = 'nsx-prod01';   Ip = '192.168.0.71' }
+        @{ Name = 'nsx-prod02';   Ip = '192.168.0.72' }
+        @{ Name = 'nsx-prod03';   Ip = '192.168.0.73' }
+        @{ Name = 'esx-prod01';   Ip = '192.168.0.81' }
+        @{ Name = 'esx-prod02';   Ip = '192.168.0.82' }
+        @{ Name = 'esx-prod03';   Ip = '192.168.0.83' }
+        # --- WLD Test (eget NSX) ---
+        @{ Name = 'vcenter-test'; Ip = '192.168.0.90'  }
+        @{ Name = 'nsx-test-vip'; Ip = '192.168.0.100' }
+        @{ Name = 'nsx-test01';   Ip = '192.168.0.101' }
+        @{ Name = 'nsx-test02';   Ip = '192.168.0.102' }
+        @{ Name = 'nsx-test03';   Ip = '192.168.0.103' }
+        @{ Name = 'esx-test01';   Ip = '192.168.0.111' }
+        @{ Name = 'esx-test02';   Ip = '192.168.0.112' }
+        @{ Name = 'esx-test03';   Ip = '192.168.0.113' }
     )
 }
  
