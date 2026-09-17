@@ -51,14 +51,14 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     WorkDir        = 'C:\nestedlab\work'   # temp for ISO-bygge
     ContentLibrary = 'nes-iso'             # lokal CL for per-host-ISO:erna (vSAN tillater inte losa filer)
     DomainSuffix   = 'nested.internal'
-    HostnamePrefix = 'esx'                 # -> esx01.nested.internal ...
-    DnsServer      = '10.10.0.10'          # lab-AD:ts IP
+    HostnamePrefix = 'esx-mgmt'            # mgmt-doman: -> esx-mgmt01 ...  (WLD-runs: 'esx-prod'/'esx-test')
+    DnsServer      = '192.168.0.10'        # lab-AD:ts IP
     DcComputer     = 'dc.nested.internal'  # for -RegisterDns
     DnsZone        = 'nested.internal'
-    NtpServer      = '10.10.0.10'
-    MgmtCidr       = '10.10.0.0/24'
-    MgmtGateway    = '10.10.0.1'
-    MgmtStartIp    = 50                    # forsta ESX far .50, sen .51 ...
+    NtpServer      = '192.168.0.10'
+    MgmtCidr       = '192.168.0.0/24'
+    MgmtGateway    = '192.168.0.1'         # gateway-VM (Cloud Builder pingar den)
+    MgmtStartIp    = 51                    # mgmt esx-mgmt01 = .51  (WLD-runs: prod 81, test 111)
     Netmask        = '255.255.255.0'
     Sizes = @{
         Small  = @{ vCPU = 8;  MemGB = 24; BootGB = 32; CacheGB = 0;   CapGB = 0;   CapDisks = 0 }
@@ -245,14 +245,18 @@ function New-NestedEnv {
         [string]$TargetHost,                       # tom = auto-pick minst lastad
         [Parameter(Mandatory)][hashtable]$Profile,
         [string]$RootPw,                           # tom = auto-genereras + returneras
-        [string]$FriendlyName,                     # tom = anvand labbnamnet ($Name)
+        [string]$FriendlyName,                     # tom = anvand env-namnet ($Name)
+        [string]$HostnamePrefix,                   # tom = profilens (esx-mgmt); WLD: 'esx-prod'/'esx-test'
+        [int]$StartIp,                             # tom = profilens; WLD: prod 81, test 111
         [switch]$RegisterDns = $true,
         [switch]$PowerOn      = $true
     )
  
-    if (-not $FriendlyName) { $FriendlyName = $Name }
+    if (-not $FriendlyName)   { $FriendlyName   = $Name }
+    if (-not $HostnamePrefix) { $HostnamePrefix = $Profile.HostnamePrefix }
+    if (-not $StartIp)        { $StartIp        = [int]$Profile.MgmtStartIp }
     if ($EsxiCount -lt 4) {
-        Write-Warning "EsxiCount < 4 racker inte for en nested VCF-mgmt-doman i steg 2."
+        Write-Warning "En VCF-mgmt-doman behover minst 4 hostar; en WLD racker med 3."
     }
     $spec = $Profile.Sizes[$Size]
     $guestId = $Profile.GuestIdMap[$Profile.EsxiVersion]   # version -> nested-ESXi guest-id
@@ -279,13 +283,15 @@ function New-NestedEnv {
     $folder = Get-Folder -Name $lab -EA SilentlyContinue
     if (-not $folder) { $folder = New-Folder -Name $lab -Location $parent }
     $pgName = "$lab-trunk"
-    New-EnvPortGroup -VDSwitchName $Profile.VDSwitchName -Name $pgName | Out-Null
+    if (-not (Get-VDPortgroup -Name $pgName -EA SilentlyContinue)) {   # idempotent: delas av mgmt/prod/test i samma pod
+        New-EnvPortGroup -VDSwitchName $Profile.VDSwitchName -Name $pgName | Out-Null
+    }
  
     # Berakna per-host-identitet
-    $base   = [int]($Profile.MgmtStartIp)
+    $base   = [int]$StartIp
     $prefix = ([ipaddress]($Profile.MgmtCidr.Split('/')[0])).GetAddressBytes()[0..2] -join '.'
     $hosts  = 1..$EsxiCount | ForEach-Object {
-        $short = ('{0}{1:D2}' -f $Profile.HostnamePrefix, $_)
+        $short = ('{0}{1:D2}' -f $HostnamePrefix, $_)
         [pscustomobject]@{
             ShortName = $short
             Fqdn      = "$short.$($Profile.DomainSuffix)"
@@ -338,8 +344,13 @@ function New-NestedEnv {
  
     # Must-run-affinitet: hela labbet stannar pa target-hosten
     $group = "$lab-vmgroup"
-    New-DrsClusterGroup -Name $group -VM (Get-VM "$lab-*") -Cluster (Get-Cluster -VMHost $vmhost) -ErrorAction SilentlyContinue | Out-Null
-    New-DrsVMHostRule -Name "$lab-mustrun" -Cluster (Get-Cluster -VMHost $vmhost) `
+    $cluster = Get-Cluster -VMHost $vmhost
+    if ($g = Get-DrsClusterGroup -Name $group -Cluster $cluster -ErrorAction SilentlyContinue) {
+        Set-DrsClusterGroup -DrsClusterGroup $g -VM (Get-VM "$lab-*") -Append -ErrorAction SilentlyContinue | Out-Null
+    } else {
+        New-DrsClusterGroup -Name $group -VM (Get-VM "$lab-*") -Cluster $cluster -ErrorAction SilentlyContinue | Out-Null
+    }
+    New-DrsVMHostRule -Name "$lab-mustrun" -Cluster $cluster `
         -VMGroup $group -VMHostGroup (Get-DrsClusterGroup -Type VMHostGroup | Where Name -match $TargetHost | Select -First 1).Name `
         -Type MustRunOn -ErrorAction SilentlyContinue | Out-Null
  
