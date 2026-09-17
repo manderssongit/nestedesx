@@ -22,7 +22,7 @@
 #  nested trunk-portgruppen. BARA management-planet behover DNS-poster (DnsRecords).
 #  ---------------------------------------------------------------------------
 #   Nat          VLAN    Subnat             GW              MTU    IP-pool (forslag)
-#   Management   0/untag 192.168.0.0/24     192.168.0.1     1500   se DnsRecords
+#   Management   0/untag 192.168.0.0/24     192.168.0.10    1500   se DnsRecords (GW = DC, svarar pa ping)
 #   vMotion      20      192.168.20.0/24    192.168.20.1    9000   .101-.150
 #   vSAN         30      192.168.30.0/24    192.168.30.1    9000   .101-.150
 #   Host TEP     40      192.168.40.0/24    192.168.40.1    9000   .101-.150
@@ -31,10 +31,11 @@
 #   Uplink-02    61      192.168.61.0/24    192.168.61.1    9000   T0 BGP-peer (om Edges)
 #  ---------------------------------------------------------------------------
 #   - Yttre laget (unmanaged vDS + trunk-portgroup) MTU 9000 sa overlay/vSAN-jumbo ryms.
-#   - GW .1 pa varje nat: Cloud Builder PINGAR mgmt-gw och failar annars. En liten
-#     gateway-VM (VyOS/pfSense), multi-armad pa dessa VLAN, svarar. vMotion/vSAN/TEP
-#     pa samma fysiska host ar L2 och behover ingen routing, men VCF-natverksprofilen
-#     vill anda ha GW-faltet ifyllt.
+#   - Cloud Builder PINGAR mgmt-gw. Pa ett flatt isolerat L2 racker att peka mgmt-gw
+#     pa DC:n (.10) som svarar pa ping - ingen router behovs. vMotion/vSAN/TEP ar L2
+#     pa samma host (ingen routing); fyll GW-faltet med .1 eller lamna default.
+#   - En riktig router-peer (VyOS/pfSense) behovs FORST nar du deployar NSX Edges med
+#     T0-uplinks/BGP - inte for mgmt-domanen eller WLD-bringup.
 #   - Alla trafikslag ar bara VLAN-taggar pa samma trunk-portgroup; separata subnat
 #     halls isar av VLAN-taggning inne i nested-miljon, inte av separata portgrupper.
 # ===========================================================================
@@ -68,7 +69,7 @@ $Config = @{
     DnsRecordsCsv  = ''                               # t.ex. 'C:\EnvBuild\dns.csv'
     DnsRecords     = @(
         # --- Infra ---
-        @{ Name = 'gw';           Ip = '192.168.0.1'  }   # gateway-VM (Cloud Builder pingar mgmt-gw)
+        @{ Name = 'gw';           Ip = '192.168.0.10' }   # mgmt-gw = DC (svarar pa ping; ingen router pa flatt isolerat nat)
         @{ Name = 'dc';           Ip = '192.168.0.10' }
         @{ Name = 'pki';          Ip = '192.168.0.10' }
         @{ Name = 'depot';        Ip = '192.168.0.10' }
@@ -167,6 +168,9 @@ function Set-EnvNetwork {
     # ingen -DefaultGateway (isolerat nat); DNS pekar pa sig sjalv (blivande DC)
     New-NetIPAddress -InterfaceAlias $nic.Name -IPAddress $Config.DcIp -PrefixLength $prefix | Out-Null
     Set-DnsClientServerAddress -InterfaceAlias $nic.Name -ServerAddresses $Config.DcIp
+    # Svara pa ping: DC:n ar mgmt-gateway (.10) och Cloud Builder pingar den vid bringup
+    New-NetFirewallRule -DisplayName 'Allow ICMPv4-In (Echo)' -Protocol ICMPv4 -IcmpType 8 `
+        -Direction Inbound -Action Allow -EA SilentlyContinue | Out-Null
 }
  
 function Invoke-Stage0-Network {
