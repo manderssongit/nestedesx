@@ -57,7 +57,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     DnsZone        = 'nested.internal'
     NtpServer      = '192.168.0.10'
     MgmtCidr       = '192.168.0.0/24'
-    MgmtGateway    = '192.168.0.1'         # gateway-VM (Cloud Builder pingar den)
+    MgmtGateway    = '192.168.0.10'        # mgmt-gw = DC (svarar pa ping; ingen router pa flatt isolerat nat)
     MgmtStartIp    = 51                    # mgmt esx-mgmt01 = .51  (WLD-runs: prod 81, test 111)
     Netmask        = '255.255.255.0'
     Sizes = @{
