@@ -1,0 +1,9 @@
+$vm = Get-VM esx01
+
+$spec = New-Object VMware.Vim.VirtualMachineConfigSpec
+$spec.ExtraConfig += New-Object VMware.Vim.OptionValue -Property @{
+  Key = "guestinfo.ks"
+  Value = "http://192.168.0.10/ks/esx01.cfg"
+}
+
+kanske esx.asp dynamic med ip till dns lookup
